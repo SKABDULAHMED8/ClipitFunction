@@ -1,0 +1,8 @@
+# Batch files and PowerShell scripts are stored with Windows (CRLF) line endings
+# exactly as committed. Git must not rewrite them: labels in .cmd files can
+# break with LF-only endings, and raw.githubusercontent.com serves them as stored.
+*.cmd  -text
+*.ps1  -text
+*.png  binary
+*.ico  binary
+*.md   text

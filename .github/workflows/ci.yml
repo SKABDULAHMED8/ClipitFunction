@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse all PowerShell scripts (PowerShell 7)
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in 'install.ps1', 'src/clipit.ps1') {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+            if ($errors) { $errors | ForEach-Object { Write-Host "$f : $_" }; $bad++ }
+          }
+          if ($bad) { exit 1 }
+
+      - name: Scripts are ASCII-only and CRLF
+        shell: pwsh
+        run: |
+          foreach ($f in 'install.ps1', 'src/clipit.ps1', 'src/clipit.cmd', 'install.cmd') {
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $f))
+            if ($bytes | Where-Object { $_ -gt 127 }) { throw "$f contains non-ASCII characters" }
+            $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+            if ($text -match "(?<!\r)\n") { throw "$f has LF-only line endings" }
+          }
+
+      - name: Install, check, repair, uninstall (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'ClipitFunction'
+          .\install.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'install failed' }
+          foreach ($n in 'clipit.ps1','clipit.cmd','clipit.ico','setup.ps1','VERSION','Powershell5CLTFS','Powershell7CLTFS','cmdCLTFS') {
+            if (-not (Test-Path (Join-Path $dir $n))) { throw "missing $n" }
+          }
+
+          # second run must report "already installed" and change nothing
+          $second = (.\install.ps1 *>&1 | Out-String)
+          if ($second -notmatch 'already installed') { throw "second run did not say already installed:`n$second" }
+
+          # PATH contains the folder exactly once
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $count = @($userPath.Split(';') | Where-Object { $_.TrimEnd('\') -ieq $dir }).Count
+          if ($count -ne 1) { throw "PATH entry count is $count" }
+
+          # profile block exactly once
+          $p5 = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\profile.ps1'
+          $blocks = ([regex]::Matches((Get-Content $p5 -Raw), '>>> Clipit')).Count
+          if ($blocks -ne 1) { throw "profile block count is $blocks" }
+
+          # the command works
+          & (Join-Path $dir 'clipit.cmd') --version
+          if ($LASTEXITCODE -ne 0) { throw 'clipit.cmd --version failed' }
+
+          # repair keeps exactly one of everything
+          .\install.ps1 -Repair
+          if ($LASTEXITCODE -ne 0) { throw 'repair failed' }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $count = @($userPath.Split(';') | Where-Object { $_.TrimEnd('\') -ieq $dir }).Count
+          if ($count -ne 1) { throw "PATH entry count after repair is $count" }
+
+          # uninstall removes everything
+          .\install.ps1 -Uninstall -Purge
+          if (Test-Path $dir) { throw 'install folder still exists after uninstall' }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath -and ($userPath.Split(';') | Where-Object { $_.TrimEnd('\') -ieq $dir })) { throw 'PATH entry still present' }

@@ -1,0 +1,6 @@
+*.txt.bak
+*.clipit-backup
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
